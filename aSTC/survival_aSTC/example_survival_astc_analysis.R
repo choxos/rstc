@@ -1,0 +1,411 @@
+################################################################################
+##################### Example Survival Anchored STC Analysis ##################
+################################################################################
+# 
+# This example demonstrates the complete workflow for survival anchored STC
+# analysis following NICE DSU TSD 18 guidance. The example includes:
+#
+# 1. Simulated IPD trial data (treatments A and B)
+# 2. Simulated KM curve data for new comparator C  
+# 3. Complete aSTC analysis workflow
+# 4. HTML report generation
+# 5. Results interpretation
+#
+# Study Design:
+# - IPD Trial: Treatment A (anchor) vs B (new intervention)
+# - External Trial: Treatment A (anchor) vs C (established comparator) 
+# - Objective: Compare B vs C indirectly through shared anchor A
+#
+# Author: Survival aSTC Example
+# Version: 1.0
+################################################################################
+
+# Load required libraries and source functions
+source("survival_astc_analysis.R")
+source("pseudo_ipd_reconstruction_astc.R") 
+source("survival_astc_html_reporting.R")
+
+# Set seed for reproducibility
+set.seed(123456)
+
+################################################################################
+##################### 1. Generate Simulated IPD Trial Data ###################
+################################################################################
+
+cat("==============================================\n")
+cat("SURVIVAL ANCHORED STC EXAMPLE ANALYSIS\n")
+cat("==============================================\n\n")
+
+cat("Step 1: Generating simulated IPD trial data...\n")
+
+# Simulate IPD trial: A (standard care) vs B (new intervention)
+# Treatment A will serve as the anchor arm
+n_per_arm <- 200
+total_n_ipd <- n_per_arm * 2
+
+# Generate baseline characteristics
+ipd_trial_data <- data.frame(
+  id = 1:total_n_ipd,
+  treatment = rep(c("A", "B"), each = n_per_arm),
+  age = c(rnorm(n_per_arm, mean = 65, sd = 8),      # Arm A: mean age 65
+          rnorm(n_per_arm, mean = 63, sd = 8)),     # Arm B: mean age 63
+  gender = c(rbinom(n_per_arm, 1, 0.4),             # Arm A: 40% male
+             rbinom(n_per_arm, 1, 0.45)),           # Arm B: 45% male  
+  ecog_ps = c(rbinom(n_per_arm, 1, 0.3),            # Arm A: 30% ECOG PS 1
+              rbinom(n_per_arm, 1, 0.25))           # Arm B: 25% ECOG PS 1
+)
+
+# Generate survival outcomes using Weibull distribution
+# Treatment B has improved survival (HR = 0.7 vs A)
+lambda_a <- 0.05   # Scale parameter for treatment A
+lambda_b <- 0.035  # Scale parameter for treatment B (better survival)
+shape <- 1.5       # Shape parameter (Weibull)
+
+# Age effect: older patients have worse survival
+age_effect <- 0.02 # Hazard increases by 2% per year
+
+# Generate survival times
+for (i in 1:total_n_ipd) {
+  treatment_effect <- ifelse(ipd_trial_data$treatment[i] == "B", log(0.7), 0)
+  age_centered <- ipd_trial_data$age[i] - 65  # Center age at 65
+  
+  # Linear predictor
+  lp <- treatment_effect + age_effect * age_centered
+  
+  # Generate survival time from Weibull distribution
+  u <- runif(1)
+  base_lambda <- ifelse(ipd_trial_data$treatment[i] == "B", lambda_b, lambda_a)
+  adjusted_lambda <- base_lambda * exp(lp)
+  
+  survival_time <- (-log(u) / adjusted_lambda)^(1/shape)
+  
+  # Generate censoring time (administrative censoring at 36 months)
+  censor_time <- 36
+  
+  # Observed time and event indicator
+  ipd_trial_data$time[i] <- min(survival_time, censor_time)
+  ipd_trial_data$status[i] <- ifelse(survival_time <= censor_time, 1, 0)
+}
+
+# Summary of IPD trial data
+cat("IPD Trial Summary:\n")
+cat("  Total patients:", nrow(ipd_trial_data), "\n")
+cat("  Treatment A (anchor):", sum(ipd_trial_data$treatment == "A"), "patients\n")
+cat("  Treatment B (intervention):", sum(ipd_trial_data$treatment == "B"), "patients\n")
+cat("  Overall events:", sum(ipd_trial_data$status), "\n")
+cat("  Median follow-up:", round(median(ipd_trial_data$time), 1), "months\n\n")
+
+# Treatment-specific summaries
+for (trt in c("A", "B")) {
+  subset_data <- ipd_trial_data[ipd_trial_data$treatment == trt, ]
+  events <- sum(subset_data$status)
+  median_time <- median(subset_data$time[subset_data$status == 1])
+  
+  cat("  Treatment", trt, ":\n")
+  cat("    Events:", events, "/", nrow(subset_data), "\n")
+  cat("    Median survival:", round(median_time, 1), "months\n")
+  cat("    Mean age:", round(mean(subset_data$age), 1), "\n")
+  cat("    Male %:", round(mean(subset_data$gender) * 100, 1), "%\n\n")
+}
+
+################################################################################
+##################### 2. Generate External Trial KM Data #####################
+################################################################################
+
+cat("Step 2: Generating external trial KM curve data for comparator C...\n")
+
+# Simulate KM curve for treatment C (established comparator)
+# Treatment C has intermediate efficacy (HR = 0.85 vs A)
+time_points <- c(0, 3, 6, 9, 12, 15, 18, 21, 24, 27, 30, 33, 36)
+n_timepoints <- length(time_points)
+
+# Survival probabilities for treatment C (worse than B, better than A)
+# Using exponential survival with HR = 0.85 vs A
+hr_c_vs_a <- 0.85
+lambda_c <- lambda_a * hr_c_vs_a
+
+survival_probs_c <- exp(-lambda_c * time_points)
+
+# Add some realistic noise to survival probabilities
+survival_probs_c <- pmax(0, pmin(1, survival_probs_c + rnorm(n_timepoints, 0, 0.02)))
+survival_probs_c[1] <- 1.0  # Ensure survival = 1 at time 0
+
+# Create KM data frame for treatment C
+km_data_c <- data.frame(
+  time = time_points,
+  survival = survival_probs_c
+)
+
+# Generate number at risk data for treatment C
+n_start_c <- 180  # Sample size for treatment C
+nrisk_c <- numeric(n_timepoints)
+nrisk_c[1] <- n_start_c
+
+# Simulate realistic number at risk decline
+for (i in 2:n_timepoints) {
+  # Events and censoring between time points
+  interval_length <- time_points[i] - time_points[i-1]
+  expected_events <- nrisk_c[i-1] * (survival_probs_c[i-1] - survival_probs_c[i]) / survival_probs_c[i-1]
+  expected_censoring <- nrisk_c[i-1] * 0.05 * interval_length / 3  # 5% censoring per 3 months
+  
+  nrisk_c[i] <- max(0, round(nrisk_c[i-1] - expected_events - expected_censoring))
+}
+
+# Create number at risk data frame
+nrisk_data_c <- data.frame(
+  time = time_points,
+  nrisk = nrisk_c
+)
+
+cat("External Trial KM Data Summary:\n")
+cat("  Treatment C sample size:", n_start_c, "\n")
+cat("  Survival at 12 months:", round(survival_probs_c[time_points == 12], 3), "\n")
+cat("  Survival at 24 months:", round(survival_probs_c[time_points == 24], 3), "\n")
+cat("  Survival at 36 months:", round(survival_probs_c[time_points == 36], 3), "\n")
+cat("  Number at risk at 36 months:", nrisk_c[n_timepoints], "\n\n")
+
+################################################################################
+##################### 3. Define Target Population Characteristics #############
+################################################################################
+
+cat("Step 3: Defining target population characteristics...\n")
+
+# Define target population (the population we want to make inferences about)
+# This could be based on real-world evidence, registries, or clinical judgment
+target_population_means <- list(
+  age = 67,           # Target population mean age: 67 years
+  gender = 0.42,      # Target population: 42% male
+  ecog_ps = 0.35      # Target population: 35% with ECOG PS 1
+)
+
+cat("Target Population Characteristics:\n")
+cat("  Mean age:", target_population_means$age, "years\n")
+cat("  Male percentage:", target_population_means$gender * 100, "%\n")
+cat("  ECOG PS 1 percentage:", target_population_means$ecog_ps * 100, "%\n\n")
+
+################################################################################
+##################### 4. Run Survival aSTC Analysis ##########################
+################################################################################
+
+cat("Step 4: Running comprehensive survival aSTC analysis...\n")
+
+# Define covariate columns for analysis
+covariate_cols <- c("age", "gender", "ecog_ps")
+
+# Define models with different levels of covariate adjustment
+analysis_models <- list(
+  "Naive" = ~ treatment,
+  "Age_Adjusted" = ~ treatment + age_centered,
+  "Demographics" = ~ treatment + age_centered + gender_centered,
+  "Full_Model" = ~ treatment + age_centered + gender_centered + ecog_ps_centered
+)
+
+# Run the complete aSTC analysis
+astc_results <- survival_astc_analysis(
+  ipd_data = ipd_trial_data,
+  km_data_comparator = km_data_c,
+  nrisk_data_comparator = nrisk_data_c,
+  target_population_means = target_population_means,
+  time_col = "time",
+  status_col = "status",
+  treatment_col = "treatment",
+  anchor_arm = "A",
+  ipd_comparator_arm = "B",
+  new_comparator_arm = "C",
+  covariate_cols = covariate_cols,
+  models = analysis_models,
+  distributions = c("weibull", "gamma", "lnorm", "gompertz", "exp", "llogis"),
+  study_name = "Example Survival aSTC Analysis",
+  outcome_name = "Overall Survival"
+)
+
+################################################################################
+##################### 5. Generate HTML Report ################################
+################################################################################
+
+cat("Step 5: Generating comprehensive HTML report...\n")
+
+# Generate HTML report
+report_filename <- paste0("survival_astc_example_report_", 
+                         format(Sys.time(), "%Y%m%d_%H%M%S"), ".html")
+
+html_report <- generate_survival_astc_html_report(
+  results = astc_results,
+  project_name = "Example_Anchored_STC", 
+  output_dir = "reports",
+  output_file = report_filename,
+  title = "Survival Anchored STC Analysis - Example Study"
+)
+
+cat("HTML report generated:", report_filename, "\n\n")
+
+################################################################################
+##################### 6. Display Key Results ##################################
+################################################################################
+
+cat("==============================================\n")
+cat("KEY RESULTS SUMMARY\n")
+cat("==============================================\n\n")
+
+# Print analysis summary
+print(astc_results)
+
+# Display distribution selection results
+cat("Distribution Selection Results:\n")
+print(astc_results$distribution_selection$aic_table)
+cat("\n")
+
+# Display model fitting results
+cat("Model Fitting Summary:\n")
+for (model_name in names(astc_results$model_results)) {
+  result <- astc_results$model_results[[model_name]]
+  if (!is.null(result$fit)) {
+    cat("  ", model_name, ":\n")
+    cat("    AIC:", round(result$diagnostics$AIC, 2), "\n")
+    cat("    Log-likelihood:", round(result$diagnostics$log_likelihood, 2), "\n")
+    cat("    Convergence:", result$diagnostics$convergence, "\n")
+  } else {
+    cat("  ", model_name, ": Failed to fit\n")
+  }
+}
+cat("\n")
+
+# Display comparison results (example for one model)
+if ("Full_Model" %in% names(astc_results$comparison_results)) {
+  full_model_results <- astc_results$comparison_results$Full_Model
+  
+  cat("Primary Comparison Results (Full Model):\n")
+  cat("Treatment B vs C (indirect via anchor A):\n")
+  
+  if (!is.null(full_model_results$indirect_comparison)) {
+    indirect <- full_model_results$indirect_comparison
+    
+    if ("hr" %in% names(indirect)) {
+      # Hazard ratio results (for PH models)
+      cat("  Hazard Ratio:", round(indirect$hr, 3), "\n")
+      cat("  95% CI: (", round(indirect$hr_lower, 3), ", ", 
+          round(indirect$hr_upper, 3), ")\n", sep = "")
+    } else if ("difference" %in% names(indirect)) {
+      # Survival time difference results (for AFT models)
+      cat("  Survival Difference:", round(indirect$difference, 2), "months\n")
+      cat("  95% CI: (", round(indirect$lower, 2), ", ", 
+          round(indirect$upper, 2), ")\n", sep = "")
+    }
+  } else {
+    cat("  Indirect comparison results not available\n")
+  }
+}
+
+cat("\n")
+
+################################################################################
+##################### 7. Validation and Quality Checks #######################
+################################################################################
+
+cat("==============================================\n")
+cat("VALIDATION AND QUALITY ASSESSMENT\n")
+cat("==============================================\n\n")
+
+# Pseudo-IPD validation results
+if (!is.null(astc_results$pseudo_ipd_reconstruction$validation_metrics)) {
+  validation <- astc_results$pseudo_ipd_reconstruction$validation_metrics
+  
+  cat("Pseudo-IPD Reconstruction Quality:\n")
+  cat("  Mean Absolute Error:", round(validation$mean_absolute_error, 4), "\n")
+  cat("  RMSE:", round(validation$rmse, 4), "\n")
+  cat("  Correlation:", round(validation$correlation, 4), "\n")
+  cat("  Overall Quality:", validation$quality_assessment$overall_quality, "\n\n")
+}
+
+# Data summary
+if (!is.null(astc_results$pseudo_ipd_reconstruction$reconstruction_summary)) {
+  recon_summary <- astc_results$pseudo_ipd_reconstruction$reconstruction_summary
+  
+  cat("Reconstructed Data Summary:\n")
+  cat("  Treatment:", recon_summary$treatment, "\n")
+  cat("  Sample size:", recon_summary$sample_size, "\n")
+  cat("  Events:", recon_summary$events, "\n")
+  cat("  Median time:", round(recon_summary$median_time, 1), "months\n")
+  cat("  Max follow-up:", round(recon_summary$max_followup, 1), "months\n\n")
+}
+
+################################################################################
+##################### 8. Clinical Interpretation ############################
+################################################################################
+
+cat("==============================================\n")
+cat("CLINICAL INTERPRETATION\n")
+cat("==============================================\n\n")
+
+cat("This example demonstrates a complete survival anchored STC analysis:\n\n")
+
+cat("1. STUDY DESIGN:\n")
+cat("   - IPD Trial: New intervention (B) vs Standard care (A)\n")
+cat("   - External Trial: Established comparator (C) vs Standard care (A)\n")
+cat("   - Indirect Comparison: B vs C through shared anchor A\n\n")
+
+cat("2. METHODOLOGY:\n")
+cat("   - Parametric survival modeling with distribution selection\n")
+cat("   - Pseudo-IPD reconstruction for treatment C only\n")
+cat("   - Population adjustment to target population\n")
+cat("   - Multiple covariate adjustment models\n\n")
+
+cat("3. KEY ADVANTAGES OF aSTC:\n")
+cat("   - Uses shared anchor to reduce bias vs unanchored methods\n")
+cat("   - Enables population-adjusted indirect comparisons\n")
+cat("   - Follows NICE DSU TSD 18 best practices\n")
+cat("   - Provides uncertainty quantification\n\n")
+
+cat("4. NEXT STEPS:\n")
+cat("   - Review HTML report for detailed results\n")
+cat("   - Validate assumptions and model fit\n")
+cat("   - Consider sensitivity analyses\n")
+cat("   - Document clinical interpretation\n\n")
+
+cat("==============================================\n")
+cat("SURVIVAL ANCHORED STC EXAMPLE COMPLETED\n")
+cat("Report saved as:", report_filename, "\n")
+cat("==============================================\n")
+
+################################################################################
+##################### 9. Optional: Create Validation Plots ###################
+################################################################################
+
+# Create a simple validation plot for the pseudo-IPD reconstruction
+if (!is.null(astc_results$pseudo_ipd_reconstruction$validation_plot)) {
+  
+  cat("\nCreating validation plot...\n")
+  
+  # Save validation plot
+  plot_filename <- paste0("validation_plot_", format(Sys.time(), "%Y%m%d_%H%M%S"), ".png")
+  
+  tryCatch({
+    ggsave(plot_filename, 
+           astc_results$pseudo_ipd_reconstruction$validation_plot,
+           width = 10, height = 6, dpi = 300)
+    cat("Validation plot saved as:", plot_filename, "\n")
+  }, error = function(e) {
+    cat("Could not save validation plot:", e$message, "\n")
+  })
+}
+
+################################################################################
+##################### 10. Example Data Export for Further Analysis ############
+################################################################################
+
+# Save example data for further analysis or documentation
+example_data <- list(
+  ipd_trial_data = ipd_trial_data,
+  km_data_c = km_data_c,
+  nrisk_data_c = nrisk_data_c,
+  target_population_means = target_population_means,
+  astc_results = astc_results
+)
+
+data_filename <- paste0("survival_astc_example_data_", 
+                       format(Sys.time(), "%Y%m%d_%H%M%S"), ".RData")
+
+save(example_data, file = data_filename)
+cat("Example data saved as:", data_filename, "\n")
+
+cat("\nExample analysis complete! Check the generated files for detailed results.\n") 

@@ -1,0 +1,485 @@
+################################################################################
+##################### Prognostic Factor Analysis for Unanchored STC ##########
+################################################################################
+# 
+# Comprehensive Covariate Analysis with Simulated Data for Population Adjustment
+# Multi-Outcome Investigation
+#
+# Author: Unanchored STC Analysis Package
+# Date: Created automatically from example_tem_analysis.Rmd
+# 
+# This example demonstrates the Comprehensive Prognostic Factor Analysis function
+# using simulated clinical trial data for unanchored simulated treatment comparison (STC).
+# The analysis examines multiple outcomes across different types (binary, survival) to
+# identify important prognostic factors that should be considered for population 
+# adjustment in unanchored indirect comparisons.
+#
+# Note: In unanchored STC, there is no common comparator between studies, so treatment
+# variables are not included in the prognostic factor analysis. The goal is to identify
+# baseline characteristics that predict outcomes and may create imbalances between 
+# study populations.
+################################################################################
+
+# Load required libraries
+library(dplyr)
+library(ggplot2)
+library(survival)
+library(knitr)
+library(DT)
+library(plotly)
+
+# Source TEM analysis functions
+source("tem_comprehensive_analysis.R")
+source("tem_html_reporting.R")
+
+################################################################################
+##################### Data Generation ########################################
+################################################################################
+
+set.seed(123)  # Same seed as working previous version
+
+# Set sample size - use same as working version
+n_patients <- 200
+
+# Generate baseline covariates
+generate_clinical_data <- function(n) {
+  
+  # Age: Normal distribution around 65 years
+  age <- round(rnorm(n, mean = 65, sd = 12))
+  age <- pmax(18, pmin(90, age))  # Constrain to realistic range
+  
+  # Sex: Binary (0 = Female, 1 = Male)
+  sex <- rbinom(n, 1, 0.52)  # Slightly more males
+  
+  # BMI: Log-normal distribution
+  bmi <- round(exp(rnorm(n, mean = log(27), sd = 0.3)), 1)
+  bmi <- pmax(16, pmin(45, bmi))  # Realistic BMI range
+  
+  # Smoking status: Categorical (0 = Never, 1 = Former, 2 = Current)
+  smoking_probs <- c(0.5, 0.35, 0.15)  # Never, Former, Current
+  smoking_status <- sample(0:2, n, replace = TRUE, prob = smoking_probs)
+  
+  # Comorbidity score: Poisson distribution
+  comorbidity_score <- rpois(n, lambda = 2)
+  comorbidity_score <- pmin(comorbidity_score, 8)  # Cap at 8
+  
+  # Treatment assignment (simulated for realism but not used in unanchored STC analysis)
+  treatment <- rbinom(n, 1, 0.5)  # 1:1 randomization
+  
+  # Create data frame
+  data.frame(
+    patient_id = 1:n,
+    age = age,
+    sex = factor(sex, levels = 0:1, labels = c("Female", "Male")),
+    bmi = bmi,
+    smoking_status = factor(smoking_status, levels = 0:2, 
+                           labels = c("Never", "Former", "Current")),
+    comorbidity_score = comorbidity_score,
+    treatment = factor(treatment, levels = 0:1, labels = c("Control", "Treatment"))
+  )
+}
+
+# Generate the clinical dataset
+clinical_data <- generate_clinical_data(n_patients)
+
+# Display summary
+cat("Generated clinical dataset with", nrow(clinical_data), "patients\n")
+summary(clinical_data)
+
+################################################################################
+##################### Generate Binary Outcomes ###############################
+################################################################################
+
+# Binary outcomes with realistic effect modification patterns and weaker associations
+generate_binary_outcomes <- function(data) {
+  
+  n <- nrow(data)
+  
+  # Convert factors to numeric for calculations
+  age_std <- scale(data$age)[,1]
+  sex_num <- as.numeric(data$sex) - 1  # 0/1
+  bmi_std <- scale(data$bmi)[,1]
+  smoking_num <- as.numeric(data$smoking_status) - 1  # 0/1/2
+  comorbidity_std <- scale(data$comorbidity_score)[,1]
+  treatment_num <- as.numeric(data$treatment) - 1  # 0/1
+  
+  # Outcome 1: Treatment Response 
+  # Strong age effect, weaker correlated effects that may not survive multivariate
+  logit_response <- -0.8 + 
+                   0.4 * treatment_num +
+                   0.5 * age_std +  # Strong prognostic factor
+                   0.25 * treatment_num * age_std +  # Age × Treatment interaction
+                   -0.2 * sex_num +  # Moderate effect correlated with age
+                   0.15 * comorbidity_std +  # Weaker effect, may drop out
+                   0.1 * bmi_std  # Very weak, likely to drop out
+  
+  prob_response <- plogis(logit_response)
+  treatment_response <- rbinom(n, 1, prob_response)
+  
+  # Outcome 2: Adverse Events 
+  # BMI is main factor, other variables are weaker and correlated
+  logit_adverse <- -1.5 + 
+                  0.3 * treatment_num +
+                  0.4 * bmi_std +  # Strong prognostic factor
+                  0.2 * treatment_num * bmi_std +  # BMI × Treatment interaction
+                  0.15 * age_std +  # Correlated with BMI, may drop out
+                  0.18 * (smoking_num == 2) +  # Current smokers - moderate effect
+                  0.1 * sex_num  # Weak effect, likely to drop out
+  
+  prob_adverse <- plogis(logit_adverse)
+  adverse_events <- rbinom(n, 1, prob_adverse)
+  
+  # Outcome 3: Treatment Discontinuation 
+  # Comorbidity is main factor, create scenario where multiple weak effects exist
+  logit_discontinuation <- -2.2 + 
+                          0.35 * treatment_num +
+                          0.45 * comorbidity_std +  # Strong prognostic factor
+                          0.3 * treatment_num * comorbidity_std +  # Comorbidity × Treatment interaction
+                          0.18 * sex_num +  # Moderate effect
+                          0.12 * (smoking_num >= 1) +  # Any smoking - weak effect, may drop out
+                          0.08 * age_std +  # Very weak, highly correlated with comorbidity
+                          0.06 * bmi_std   # Very weak, likely to drop out
+  
+  prob_discontinuation <- plogis(logit_discontinuation)
+  treatment_discontinuation <- rbinom(n, 1, prob_discontinuation)
+  
+  # Return as data frame
+  data.frame(
+    treatment_response = factor(treatment_response, levels = 0:1, 
+                               labels = c("No Response", "Response")),
+    adverse_events = factor(adverse_events, levels = 0:1, 
+                           labels = c("No AE", "AE Occurred")),
+    treatment_discontinuation = factor(treatment_discontinuation, levels = 0:1, 
+                                      labels = c("Continued", "Discontinued"))
+  )
+}
+
+# Generate binary outcomes
+binary_outcomes <- generate_binary_outcomes(clinical_data)
+
+# Display summary
+cat("Binary Outcomes Summary:\n")
+for (outcome in names(binary_outcomes)) {
+  cat("\n", outcome, ":\n")
+  print(table(binary_outcomes[[outcome]], clinical_data$treatment))
+}
+
+################################################################################
+##################### Generate Survival Outcomes ############################
+################################################################################
+
+# Survival outcomes with realistic censoring and correlated weak effects
+generate_survival_outcomes <- function(data) {
+  
+  n <- nrow(data)
+  
+  # Convert factors to numeric for calculations
+  age_std <- scale(data$age)[,1]
+  sex_num <- as.numeric(data$sex) - 1
+  bmi_std <- scale(data$bmi)[,1]
+  smoking_num <- as.numeric(data$smoking_status) - 1
+  comorbidity_std <- scale(data$comorbidity_score)[,1]
+  treatment_num <- as.numeric(data$treatment) - 1
+  
+  # Survival Outcome 1: Time to Disease Progression
+  # Age is main prognostic factor, others are weaker and correlated
+  log_hazard_progression <- 0.1 +
+                           -0.3 * treatment_num +
+                           0.4 * age_std +  # Strong prognostic factor
+                           -0.2 * treatment_num * age_std +  # Treatment effect varies by age
+                           0.15 * sex_num +  # Moderate effect, correlated with age
+                           0.12 * comorbidity_std +  # Weak effect, may drop out
+                           0.08 * (smoking_num == 2) +  # Very weak, may drop out
+                           0.05 * bmi_std  # Very weak, likely to drop out
+  
+  # Generate exponential survival times
+  hazard_progression <- exp(log_hazard_progression)
+  time_to_progression <- rexp(n, rate = hazard_progression)
+  
+  # Administrative censoring at 36 months + random censoring
+  admin_censor_time <- 36
+  random_censor_rate <- 0.02  # 2% per month
+  random_censor_time <- rexp(n, rate = random_censor_rate)
+  censor_time_progression <- pmin(admin_censor_time, random_censor_time)
+  
+  observed_time_progression <- pmin(time_to_progression, censor_time_progression)
+  event_progression <- as.numeric(time_to_progression <= censor_time_progression)
+  
+  # Survival Outcome 2: Overall Survival
+  # Create realistic scenario where some variables will be eliminated
+  log_hazard_survival <- -0.2 +
+                        -0.4 * treatment_num +
+                        0.3 * age_std +  # Strong effect (will stay)
+                        0.05 * sex_num +  # Very weak effect (likely to be eliminated with p>0.2)
+                        0.4 * comorbidity_std +  # Strong effect (will stay)
+                        -0.3 * treatment_num * comorbidity_std +  # Interaction effect
+                        0.15 * (smoking_num == 2) +  # Moderate effect (may stay)
+                        0.08 * bmi_std  # Weak effect (likely to be eliminated)
+  
+  hazard_survival <- exp(log_hazard_survival)
+  time_to_death <- rexp(n, rate = hazard_survival)
+  
+  # Longer follow-up for survival (60 months)
+  admin_censor_survival <- 60
+  random_censor_survival <- rexp(n, rate = 0.015)  # Lower censoring rate
+  censor_time_survival <- pmin(admin_censor_survival, random_censor_survival)
+  
+  observed_time_survival <- pmin(time_to_death, censor_time_survival)
+  event_survival <- as.numeric(time_to_death <= censor_time_survival)
+  
+  # Survival Outcome 3: Time to Treatment Toxicity
+  # Sex and BMI are main factors, others are weak and may be eliminated
+  log_hazard_toxicity <- -0.8 +
+                        0.25 * treatment_num +
+                        0.35 * sex_num +  # Strong prognostic factor
+                        0.3 * bmi_std +  # Strong prognostic factor  
+                        0.3 * treatment_num * sex_num +  # Treatment effect varies by sex
+                        0.12 * age_std +  # Weak effect, may drop out
+                        0.1 * comorbidity_std +  # Weak effect, may drop out
+                        0.08 * (smoking_num >= 1)  # Very weak, may drop out
+  
+  hazard_toxicity <- exp(log_hazard_toxicity)
+  time_to_toxicity <- rexp(n, rate = hazard_toxicity)
+  
+  # Moderate follow-up (24 months)
+  admin_censor_toxicity <- 24
+  random_censor_toxicity <- rexp(n, rate = 0.025)
+  censor_time_toxicity <- pmin(admin_censor_toxicity, random_censor_toxicity)
+  
+  observed_time_toxicity <- pmin(time_to_toxicity, censor_time_toxicity)
+  event_toxicity <- as.numeric(time_to_toxicity <= censor_time_toxicity)
+  
+  # Return as data frame
+  data.frame(
+    # Progression-Free Survival
+    progression_time = round(observed_time_progression, 2),
+    progression_event = event_progression,
+    
+    # Overall Survival
+    survival_time = round(observed_time_survival, 2),
+    survival_event = event_survival,
+    
+    # Time to Toxicity
+    toxicity_time = round(observed_time_toxicity, 2),
+    toxicity_event = event_toxicity
+  )
+}
+
+# Generate survival outcomes
+survival_outcomes <- generate_survival_outcomes(clinical_data)
+
+# Display summary
+cat("Survival Outcomes Summary:\n")
+for (i in seq(1, ncol(survival_outcomes), 2)) {
+  time_var <- names(survival_outcomes)[i]
+  event_var <- names(survival_outcomes)[i + 1]
+  
+  cat("\n", time_var, "& ", event_var, ":\n")
+  cat("Median time:", round(median(survival_outcomes[[time_var]]), 2), "\n")
+  cat("Event rate:", round(mean(survival_outcomes[[event_var]]) * 100, 1), "%\n")
+  
+  # Kaplan-Meier by treatment
+  surv_obj <- Surv(survival_outcomes[[time_var]], survival_outcomes[[event_var]])
+  km_fit <- survfit(surv_obj ~ clinical_data$treatment)
+  cat("Median survival by treatment:\n")
+  print(summary(km_fit)$table[, "median"])
+}
+
+################################################################################
+##################### Combine Complete Dataset ###############################
+################################################################################
+
+# Combine all data into a single dataset
+complete_data <- cbind(clinical_data, binary_outcomes, survival_outcomes)
+
+# Display final dataset structure
+cat("Complete Dataset Structure:\n")
+cat("Dimensions:", nrow(complete_data), "rows ×", ncol(complete_data), "columns\n\n")
+
+# Show first few rows
+print(head(complete_data, 10))
+
+################################################################################
+##################### TEM Analysis ############################################
+################################################################################
+
+# Define outcomes for analysis
+outcomes <- list(
+  # Binary outcomes
+  "Treatment Response" = "treatment_response",
+  "Adverse Events" = "adverse_events", 
+  "Treatment Discontinuation" = "treatment_discontinuation",
+  
+  # Survival outcomes  
+  "Progression-Free Survival" = "progression_time",
+  "Overall Survival" = "survival_time",
+  "Time to Toxicity" = "toxicity_time"
+)
+
+# Define time and event variables for survival outcomes
+time_vars <- c(
+  "Progression-Free Survival" = "progression_time",
+  "Overall Survival" = "survival_time", 
+  "Time to Toxicity" = "toxicity_time"
+)
+
+event_vars <- c(
+  "Progression-Free Survival" = "progression_event",
+  "Overall Survival" = "survival_event",
+  "Time to Toxicity" = "toxicity_event"
+)
+
+# Define covariates to test
+covariates <- c("age", "sex", "bmi", "smoking_status", "comorbidity_score")
+
+# Analysis parameters
+analysis_params <- list(
+  univariate_alpha = 0.2,    # Liberal threshold for univariate screening
+  multivariate_alpha = 0.2,  # Exploratory threshold for adjusted models
+  selection_method = "backward",
+  report_title = "Multi-Outcome Prognostic Factor Analysis for Unanchored STC",
+  include_plots = TRUE
+)
+
+cat("Prognostic Factor Analysis Configuration:\n")
+cat("- Outcomes:", length(outcomes), "(", length(outcomes) - 3, "binary +", 3, "survival )\n")
+cat("- Prognostic factors:", length(covariates), "\n")
+cat("- Univariate α:", analysis_params$univariate_alpha, "\n")
+cat("- Multivariate α:", analysis_params$multivariate_alpha, "\n")
+cat("- Selection method:", analysis_params$selection_method, "\n")
+
+################################################################################
+##################### Run Comprehensive TEM Analysis #########################
+################################################################################
+
+# Create output directory
+output_dir <- "reports"
+dir.create(output_dir, recursive = TRUE, showWarnings = FALSE)
+
+# Run the comprehensive prognostic factor analysis
+cat("Starting comprehensive prognostic factor analysis for unanchored STC...\n")
+cat("This may take a few minutes for", length(outcomes), "outcomes...\n\n")
+
+tem_results <- tem_comprehensive_analysis(
+  data = complete_data,
+  outcomes = outcomes,
+  time_vars = time_vars,
+  event_vars = event_vars,
+  covariates = covariates,
+  univariate_alpha = analysis_params$univariate_alpha,
+  multivariate_alpha = analysis_params$multivariate_alpha,
+  selection_method = analysis_params$selection_method,
+  report_title = analysis_params$report_title,
+  output_dir = output_dir,
+  include_plots = analysis_params$include_plots
+)
+
+################################################################################
+##################### Analysis Results Summary ###############################
+################################################################################
+
+# Extract key results
+results <- tem_results$results
+
+cat("=== PROGNOSTIC FACTOR ANALYSIS COMPLETED ===\n")
+cat("Runtime:", sprintf("%.2f", as.numeric(tem_results$runtime)), 
+    attr(tem_results$runtime, "units"), "\n")
+cat("HTML Report:", tem_results$report_file, "\n\n")
+
+# Summary statistics
+cat("ANALYSIS SUMMARY:\n")
+cat("- Total outcomes analyzed:", length(results$outcomes), "\n")
+cat("- Total prognostic factors tested:", length(covariates), "\n")
+cat("- Univariate significant associations:", 
+    nrow(results$univariate_table[results$univariate_table$Significant == "✓", ]), "\n")
+cat("- Multivariate significant associations:", 
+    nrow(results$multivariate_table[results$multivariate_table$Significant == "✓", ]), "\n\n")
+
+# Significant multivariate findings
+if (nrow(results$multivariate_table) > 0) {
+  significant_mv <- results$multivariate_table[results$multivariate_table$Significant == "✓", ]
+  
+  if (nrow(significant_mv) > 0) {
+    cat("SIGNIFICANT PROGNOSTIC FACTORS:\n")
+    for (i in 1:nrow(significant_mv)) {
+      cat("•", significant_mv$Outcome[i], "~", significant_mv$Variable[i], 
+          ":", significant_mv$Effect_Estimate_CI[i], "(p =", significant_mv$P_value[i], ")\n")
+    }
+  } else {
+    cat("No significant prognostic associations found.\n")
+  }
+} else {
+  cat("No multivariate models converged.\n")
+}
+
+################################################################################
+##################### Covariate Effect Analysis ##############################
+################################################################################
+
+# Analyze covariate effect patterns
+if (nrow(results$multivariate_table) > 0) {
+  
+  # Count significant associations by covariate
+  covariate_summary <- results$multivariate_table %>%
+    filter(Significant == "✓") %>%
+    group_by(Variable) %>%
+    summarise(
+      n_outcomes = n(),
+      outcomes = paste(Outcome, collapse = ", "),
+      .groups = 'drop'
+    ) %>%
+    arrange(desc(n_outcomes))
+  
+  if (nrow(covariate_summary) > 0) {
+    cat("\nIMPORTANT PROGNOSTIC FACTORS:\n")
+    cat("(Variables with significant associations across multiple outcomes)\n\n")
+    
+    for (i in 1:nrow(covariate_summary)) {
+      cat("•", covariate_summary$Variable[i], "- significant in", covariate_summary$n_outcomes[i], "outcome(s)\n")
+      cat("  Outcomes:", covariate_summary$outcomes[i], "\n\n")
+    }
+  } else {
+    cat("No clear patterns of covariate effects identified.\n")
+  }
+} else {
+  cat("Cannot assess covariate effect patterns - no significant multivariate results.\n")
+}
+
+################################################################################
+##################### Conclusions #############################################
+################################################################################
+
+# Generate automated conclusions
+significant_count <- nrow(results$multivariate_table[results$multivariate_table$Significant == "✓", ])
+total_tests <- nrow(results$univariate_table)
+
+cat("### Statistical Summary\n")
+cat("- **Total associations tested:** ", total_tests, " (univariate)\n")
+cat("- **Significant after adjustment:** ", significant_count, " (multivariate)\n")
+cat("- **Multiple testing consideration:** Results should be interpreted with caution due to multiple comparisons\n\n")
+
+if (significant_count > 0) {
+  cat("### Clinical Implications for Unanchored STC\n")
+  cat("- Identified important prognostic factors that may impact unanchored STC matching\n")
+  cat("- Results suggest differential outcome patterns across patient subgroups\n")
+  cat("- These covariates should be considered in population adjustment methods\n")
+  cat("- Findings warrant validation in independent datasets\n\n")
+} else {
+  cat("### Clinical Implications for Unanchored STC\n")
+  cat("- No significant prognostic factors identified after adjustment\n")
+  cat("- Outcome patterns appear consistent across patient subgroups\n")
+  cat("- Simpler population adjustment approaches may be sufficient\n\n")
+}
+
+cat("### Next Steps for Unanchored STC\n")
+cat("1. **Population Adjustment:** Use identified prognostic factors in matching-adjusted indirect comparison (MAIC) or simulated treatment comparison (STC)\n")
+cat("2. **Validation:** Confirm prognostic effects in independent validation cohort\n")
+cat("3. **STC Implementation:** Incorporate significant covariates into unanchored STC analysis\n")
+cat("4. **Sensitivity Analysis:** Test robustness of STC results to inclusion/exclusion of different covariates\n")
+
+cat("\n", paste(rep("=", 80), collapse = ""), "\n")
+cat("PROGNOSTIC FACTOR ANALYSIS COMPLETED\n")
+cat("HTML Report:", tem_results$report_file, "\n")
+cat(paste(rep("=", 80), collapse = ""), "\n")
+
+# End of script 
