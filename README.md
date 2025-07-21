@@ -93,6 +93,63 @@ Implementation of non-linear STC methodology based on Ishak et al. (2015) that a
 - `mvn_simulation_stc_analysis.R` - Core MVN simulation functions
 - `example_mvn_simulation_stc_analysis.Rmd` & `example_mvn_simulation_stc_analysis.R` - Comprehensive examples
 
+#### Machine Learning STC Methods
+**Location**: `advanced_methods/ML_STC/`
+
+Comprehensive implementation of state-of-the-art machine learning methods for causal inference and heterogeneous treatment effect estimation in STC analysis.
+
+**Tree-Based Methods** (`tree_based/`):
+- **Causal Forests**: Honest estimation with variable importance and subgroup discovery
+- **BART**: Bayesian Additive Regression Trees with natural uncertainty quantification  
+- **XGBoost/LightGBM**: High-performance gradient boosting with hyperparameter tuning
+
+**Meta-Learning Approaches** (`meta_learning/`):
+- **T-Learner**: Separate models for treatment and control groups
+- **X-Learner**: Handles imbalanced treatment groups via counterfactual imputation
+- **R-Learner**: Direct optimization for causal objectives with theoretical optimality
+- **Double Machine Learning**: Cross-fitting for valid inference under weak assumptions
+
+**Specialized Causal Methods** (`specialized_causal/`):
+- **TMLE with Super Learner**: Doubly robust estimation with targeted bias reduction
+- **Causal Neural Networks**: TarNet and CFR for complex non-linear relationships with balanced representations
+
+**Advanced Ensemble Methods** (`ensemble_methods/`):
+- **AIPW with ML**: Doubly robust estimation using flexible ML for propensity scores and outcomes
+- **GANs for Causal Inference**: GANITE and CausalGAN for counterfactual generation
+
+**Key ML-STC Features:**
+- Heterogeneous treatment effect estimation
+- Target population predictions for STC
+- Robust inference with confidence intervals
+- Model diagnostics and sensitivity analysis
+- Support for binary and continuous outcomes
+- Integration with Python for neural networks/GANs
+- Comprehensive utility functions and examples
+
+**Files:**
+- `utils/ml_stc_utils.R` - Core utility functions for all ML methods
+- `examples/comprehensive_ml_stc_example.Rmd` & `.R` - Complete demonstration with realistic clinical data
+- Individual implementation files for each method category
+
+## Methodological Innovation
+
+This package represents the **first comprehensive implementation** of machine learning methods specifically designed for STC analysis. Traditional STC methods assume homogeneous treatment effects and linear relationships, which may not hold in real-world clinical settings. Our ML-based approaches address these limitations by:
+
+### Heterogeneous Treatment Effects
+- **Individual-level predictions**: Estimate personalized treatment effects rather than population averages
+- **Subgroup identification**: Discover patient subgroups with differential treatment responses
+- **Precision medicine**: Support personalized treatment decisions based on patient characteristics
+
+### Robust Causal Inference
+- **Doubly robust methods**: Protection against model misspecification in either propensity score or outcome models
+- **Cross-fitting**: Reduce overfitting bias through sample splitting techniques
+- **Uncertainty quantification**: Provide valid confidence intervals under weaker assumptions
+
+### Advanced Modeling Capabilities
+- **Non-linear relationships**: Capture complex interactions between covariates and outcomes
+- **High-dimensional data**: Handle scenarios with many covariates relative to sample size
+- **Deep learning integration**: Leverage neural networks for complex confounding patterns
+
 ## Key Features
 
 ### Core Analysis Capabilities
@@ -105,6 +162,10 @@ Implementation of non-linear STC methodology based on Ishak et al. (2015) that a
 ### Advanced Features (Develop Branch)
 - **Non-Linear Bias Correction**: MVN simulation addresses systematic bias in traditional methods
 - **Correlated Covariate Handling**: NORTA algorithm preserves realistic correlation structures
+- **Machine Learning Integration**: Comprehensive ML methods for causal inference and heterogeneous treatment effects
+- **Doubly Robust Estimation**: AIPW, DML, and TMLE provide protection against model misspecification
+- **Neural Network Capabilities**: Deep learning methods for complex confounding patterns
+- **Heterogeneity Analysis**: Individual-level treatment effect estimation and subgroup discovery
 - **Regulatory-Ready**: Methods suitable for health technology assessment submissions
 - **Comprehensive Validation**: Built-in quality metrics and bias assessment
 
@@ -132,6 +193,13 @@ git checkout develop
 # Source advanced methodology functions
 source("advanced_methods/NORTA_uSTC/norta_ustc_analysis.R")
 source("advanced_methods/MVN_simulation_STC/mvn_simulation_stc_analysis.R")
+
+# Source ML-based STC methods
+source("advanced_methods/ML_STC/utils/ml_stc_utils.R")
+source("advanced_methods/ML_STC/tree_based/causal_forests_stc.R")
+source("advanced_methods/ML_STC/meta_learning/double_ml_stc.R")
+source("advanced_methods/ML_STC/ensemble_methods/aipw_stc.R")
+# ... (see examples for complete sourcing)
 ```
 
 ## Quick Start Examples
@@ -160,6 +228,55 @@ source("advanced_methods/MVN_simulation_STC/mvn_simulation_stc_analysis.R")
 results <- run_complete_mvn_stc_analysis("atrial_fib")
 ```
 
+### Machine Learning STC Methods (Develop Branch)
+```r
+# Causal Forests for heterogeneous treatment effects
+source("advanced_methods/ML_STC/tree_based/causal_forests_stc.R")
+cf_results <- causal_forest_stc_analysis(data, "outcome", "treatment", covariates)
+
+# Double Machine Learning with cross-fitting
+source("advanced_methods/ML_STC/meta_learning/double_ml_stc.R")
+dml_results <- double_ml_stc_analysis(data, "outcome", "treatment", covariates)
+
+# AIPW with machine learning (doubly robust)
+source("advanced_methods/ML_STC/ensemble_methods/aipw_stc.R")
+aipw_results <- aipw_stc_analysis(data, "outcome", "treatment", covariates, 
+                                  ps_method = "rf", outcome_method = "rf")
+
+# Comprehensive ML comparison
+source("advanced_methods/ML_STC/examples/comprehensive_ml_stc_example.R")
+# Run complete analysis with all methods
+```
+
+## Method Selection Guide
+
+### When to Use Each ML Method
+
+| **Use Case** | **Recommended Methods** | **Key Benefits** |
+|--------------|------------------------|------------------|
+| **Robust estimation** | AIPW, Double ML, TMLE | Doubly robust properties |
+| **Heterogeneity discovery** | Causal Forests, Neural Networks | Subgroup identification |
+| **High interpretability** | Tree-based methods, T-Learner | Clear variable importance |
+| **Complex confounding** | Neural Networks, GANs | Non-linear relationships |
+| **Uncertainty quantification** | BART, TMLE | Bayesian/targeted inference |
+| **Imbalanced treatment groups** | X-Learner, AIPW | Handles group imbalance |
+| **High-dimensional data** | Regularized methods, Super Learner | Manages many covariates |
+| **Small sample sizes** | BART, regularized methods | Conservative estimates |
+
+### Decision Tree for Method Selection
+
+```
+┌─ Robustness Priority? ─── Yes ──→ AIPW, Double ML, TMLE
+│
+├─ Heterogeneity Focus? ─── Yes ──→ Causal Forests, Meta-learners
+│
+├─ Interpretability Need? ── Yes ──→ Tree-based methods, Linear meta-learners
+│
+├─ Complex Relationships? ── Yes ──→ Neural Networks, GANs, BART
+│
+└─ Standard Analysis ──────────────→ Start with AIPW or Double ML
+```
+
 ## Dependencies
 
 ### Core Dependencies
@@ -175,6 +292,22 @@ results <- run_complete_mvn_stc_analysis("atrial_fib")
 - `MASS` - Multivariate normal simulation
 - `mvtnorm` - Multivariate normal distributions
 
+#### Machine Learning Dependencies
+- `randomForest` - Random forest implementations
+- `xgboost` - Gradient boosting methods
+- `glmnet` - Elastic net regularization
+- `grf` - Generalized random forests (Causal Forests)
+- `BART` / `bartCause` - Bayesian additive regression trees
+- `SuperLearner` - Ensemble learning framework
+- `tmle` - Targeted maximum likelihood estimation
+- `reticulate` - Python integration (for neural networks/GANs)
+
+#### Python Dependencies (Optional, via reticulate)
+- `tensorflow` - Deep learning framework
+- `numpy` - Numerical computing
+- `scikit-learn` - Machine learning library
+- `pandas` - Data manipulation
+
 ## Methodology References
 
 ### Core Methods
@@ -186,6 +319,15 @@ results <- run_complete_mvn_stc_analysis("atrial_fib")
 - **NORTA Method**: Ren et al. (2023): "Comprehensive simulation study of unanchored simulated treatment comparison approach"
 - **MVN Simulation**: Ishak et al. (2015): "Simulated Treatment Comparison of Time-To-Event (And Other Non-Linear) Outcomes", Value in Health Journal
 
+#### Machine Learning Methods
+- **Causal Forests**: Wager & Athey (2018): "Estimation and Inference of Heterogeneous Treatment Effects using Random Forests", Journal of the American Statistical Association
+- **BART**: Chipman et al. (2010): "BART: Bayesian additive regression trees", Annals of Applied Statistics
+- **Double ML**: Chernozhukov et al. (2018): "Double/debiased machine learning for treatment and structural parameters", Econometrics Journal
+- **TMLE**: van der Laan & Rose (2011): "Targeted Learning: Causal Inference for Observational and Experimental Data"
+- **AIPW**: Robins et al. (1994): "Estimation of regression coefficients when some regressors are not always observed"
+- **TarNet**: Shalit et al. (2017): "Estimating individual treatment effect: generalization bounds and algorithms", ICML
+- **GANITE**: Yoon et al. (2018): "GANITE: Estimation of individualized treatment effects using generative adversarial nets", ICLR
+
 ## Development Roadmap
 
 ### Current Status
@@ -194,13 +336,21 @@ results <- run_complete_mvn_stc_analysis("atrial_fib")
 - ✅ HTML report generation
 - ✅ Advanced NORTA implementation (develop branch)
 - ✅ Advanced MVN simulation (develop branch)
+- ✅ **Machine Learning STC Methods (develop branch)**
+  - ✅ Tree-based methods (Causal Forests, BART, XGBoost)
+  - ✅ Meta-learning approaches (T/X/R-Learner, Double ML)
+  - ✅ Specialized causal methods (TMLE, Neural Networks)
+  - ✅ Advanced ensemble methods (AIPW, GANs)
+  - ✅ Comprehensive utilities and examples
 
 ### Future Enhancements
 - 🔄 Integration of advanced methods into main branch
 - 📋 Additional outcome types (ordinal, count)
-- 📊 Interactive dashboards
-- 📚 Comprehensive vignettes
-- 🧪 Extensive unit testing
+- 📊 Interactive dashboards and Shiny applications
+- 📚 Comprehensive vignettes and tutorials
+- 🧪 Extensive unit testing and validation studies
+- 🎯 Benchmark studies comparing ML methods
+- 📦 CRAN-ready package structure
 
 ## Contributing
 
@@ -230,4 +380,4 @@ For questions, bug reports, or feature requests, please open an issue on GitHub 
 
 ---
 
-**Note**: The advanced methodologies (NORTA and MVN simulation) are currently available in the `develop` branch and represent cutting-edge approaches for addressing limitations in traditional STC methods. These methods are particularly valuable for regulatory submissions and health technology assessments requiring the highest methodological standards.
+**Note**: The advanced methodologies (NORTA, MVN simulation, and comprehensive ML methods) are currently available in the `develop` branch and represent cutting-edge approaches for addressing limitations in traditional STC methods. The machine learning implementations provide the first comprehensive framework for heterogeneous treatment effect estimation in STC analysis. These methods are particularly valuable for regulatory submissions and health technology assessments requiring the highest methodological standards.
