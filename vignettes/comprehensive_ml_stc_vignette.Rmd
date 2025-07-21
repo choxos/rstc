@@ -441,101 +441,100 @@ if (!exists("causal_forest_stc_analysis")) {
                                          target_population = NULL, num_trees = 2000, 
                                          min_node_size = 5, sample_fraction = 0.5,
                                          honesty = TRUE, seed = 123) {
-    if (!requireNamespace("grf", quietly = TRUE)) {
-      # Fallback to Random Forest-based T-learner if grf not available
+    
+    # Check for grf package
+    if (requireNamespace("grf", quietly = TRUE)) {
+      # If grf is available, we could implement actual Causal Forest here
+      # For now, we'll fall through to Random Forest fallback
+      cat("⚠️ grf available but using Random Forest fallback for this demo\n")
+    } else {
       cat("⚠️ grf package not available, using Random Forest T-learner fallback\n")
-      
-      if (requireNamespace("randomForest", quietly = TRUE)) {
-        set.seed(seed)
-        
-        # Random Forest T-learner implementation
-        treated <- data[data[[treatment_col]] == 1, ]
-        control <- data[data[[treatment_col]] == 0, ]
-        
-        # Create feature matrix
-        X_cols <- covariate_cols
-        
-        # Convert outcome to factor for classification if binary
-        outcome_family <- detect_outcome_family(data[[outcome_col]])
-        
-        treated_y <- if (outcome_family == "binomial") {
-          as.factor(treated[[outcome_col]])
-        } else {
-          treated[[outcome_col]]
-        }
-        
-        control_y <- if (outcome_family == "binomial") {
-          as.factor(control[[outcome_col]])
-        } else {
-          control[[outcome_col]]
-        }
-        
-        # Fit Random Forest models
-        rf_1 <- randomForest::randomForest(
-          x = treated[, X_cols, drop = FALSE],
-          y = treated_y,
-          ntree = min(num_trees, 500),
-          nodesize = min_node_size,
-          sampsize = floor(sample_fraction * nrow(treated))
-        )
-        
-        rf_0 <- randomForest::randomForest(
-          x = control[, X_cols, drop = FALSE], 
-          y = control_y,
-          ntree = min(num_trees, 500),
-          nodesize = min_node_size,
-          sampsize = floor(sample_fraction * nrow(control))
-        )
-        
-        # Predict for all individuals
-        if (outcome_family == "binomial") {
-          # For binary outcomes, get class probabilities
-          pred_1 <- predict(rf_1, newdata = data[, X_cols, drop = FALSE], type = "prob")[, "1"]
-          pred_0 <- predict(rf_0, newdata = data[, X_cols, drop = FALSE], type = "prob")[, "1"]
-        } else {
-          # For continuous outcomes, get direct predictions
-          pred_1 <- predict(rf_1, newdata = data[, X_cols, drop = FALSE])
-          pred_0 <- predict(rf_0, newdata = data[, X_cols, drop = FALSE])
-        }
-        
-        individual_effects <- pred_1 - pred_0
-        ate_estimate <- mean(individual_effects, na.rm = TRUE)
-        ate_se <- sd(individual_effects, na.rm = TRUE) / sqrt(length(individual_effects))
-        
-        result <- list(
-          ate_estimate = ate_estimate,
-          individual_effects = individual_effects,
-          ate_se = ate_se,
-          ci_lower = ate_estimate - 1.96 * ate_se,
-          ci_upper = ate_estimate + 1.96 * ate_se,
-          target_predictions = if (!is.null(target_population)) {
-            if (outcome_family == "binomial") {
-              pred_1_target <- predict(rf_1, newdata = target_population[, X_cols, drop = FALSE], type = "prob")[, "1"]
-              pred_0_target <- predict(rf_0, newdata = target_population[, X_cols, drop = FALSE], type = "prob")[, "1"]
-            } else {
-              pred_1_target <- predict(rf_1, newdata = target_population[, X_cols, drop = FALSE])
-              pred_0_target <- predict(rf_0, newdata = target_population[, X_cols, drop = FALSE])
-            }
-            list(ate_estimate = mean(pred_1_target - pred_0_target, na.rm = TRUE))
-          } else NULL
-        )
-        
-        return(result)
-        
-      } else {
-        # Final fallback to GLM T-learner
-        cat("⚠️ randomForest package also not available, using GLM T-learner fallback\n")
-        return(t_learner_stc_analysis(data, outcome_col, treatment_col, covariate_cols, 
-                                      "glm", target_population, seed))
-      }
     }
     
-    # If grf is available, this would run actual Causal Forest
-    # For now, fallback to Random Forest T-learner
-    cat("⚠️ Using Random Forest T-learner fallback for Causal Forest implementation\n")
-    return(causal_forest_stc_analysis(data, outcome_col, treatment_col, covariate_cols, 
-                                      target_population, num_trees, min_node_size, sample_fraction, 
-                                      honesty, seed))
+    # Random Forest T-learner fallback implementation
+    if (requireNamespace("randomForest", quietly = TRUE)) {
+      set.seed(seed)
+      
+      # Random Forest T-learner implementation
+      treated <- data[data[[treatment_col]] == 1, ]
+      control <- data[data[[treatment_col]] == 0, ]
+      
+      # Create feature matrix
+      X_cols <- covariate_cols
+      
+      # Convert outcome to factor for classification if binary
+      outcome_family <- detect_outcome_family(data[[outcome_col]])
+      
+      treated_y <- if (outcome_family == "binomial") {
+        as.factor(treated[[outcome_col]])
+      } else {
+        treated[[outcome_col]]
+      }
+      
+      control_y <- if (outcome_family == "binomial") {
+        as.factor(control[[outcome_col]])
+      } else {
+        control[[outcome_col]]
+      }
+      
+      # Fit Random Forest models
+      rf_1 <- randomForest::randomForest(
+        x = treated[, X_cols, drop = FALSE],
+        y = treated_y,
+        ntree = min(num_trees, 500),
+        nodesize = min_node_size,
+        sampsize = floor(sample_fraction * nrow(treated))
+      )
+      
+      rf_0 <- randomForest::randomForest(
+        x = control[, X_cols, drop = FALSE], 
+        y = control_y,
+        ntree = min(num_trees, 500),
+        nodesize = min_node_size,
+        sampsize = floor(sample_fraction * nrow(control))
+      )
+      
+      # Predict for all individuals
+      if (outcome_family == "binomial") {
+        # For binary outcomes, get class probabilities
+        pred_1 <- predict(rf_1, newdata = data[, X_cols, drop = FALSE], type = "prob")[, "1"]
+        pred_0 <- predict(rf_0, newdata = data[, X_cols, drop = FALSE], type = "prob")[, "1"]
+      } else {
+        # For continuous outcomes, get direct predictions
+        pred_1 <- predict(rf_1, newdata = data[, X_cols, drop = FALSE])
+        pred_0 <- predict(rf_0, newdata = data[, X_cols, drop = FALSE])
+      }
+      
+      individual_effects <- pred_1 - pred_0
+      ate_estimate <- mean(individual_effects, na.rm = TRUE)
+      ate_se <- sd(individual_effects, na.rm = TRUE) / sqrt(length(individual_effects))
+      
+      result <- list(
+        ate_estimate = ate_estimate,
+        individual_effects = individual_effects,
+        ate_se = ate_se,
+        ci_lower = ate_estimate - 1.96 * ate_se,
+        ci_upper = ate_estimate + 1.96 * ate_se,
+        target_predictions = if (!is.null(target_population)) {
+          if (outcome_family == "binomial") {
+            pred_1_target <- predict(rf_1, newdata = target_population[, X_cols, drop = FALSE], type = "prob")[, "1"]
+            pred_0_target <- predict(rf_0, newdata = target_population[, X_cols, drop = FALSE], type = "prob")[, "1"]
+          } else {
+            pred_1_target <- predict(rf_1, newdata = target_population[, X_cols, drop = FALSE])
+            pred_0_target <- predict(rf_0, newdata = target_population[, X_cols, drop = FALSE])
+          }
+          list(ate_estimate = mean(pred_1_target - pred_0_target, na.rm = TRUE))
+        } else NULL
+      )
+      
+      return(result)
+      
+    } else {
+      # Final fallback to GLM T-learner
+      cat("⚠️ randomForest package also not available, using GLM T-learner fallback\n")
+      return(t_learner_stc_analysis(data, outcome_col, treatment_col, covariate_cols, 
+                                    "glm", target_population, seed))
+    }
   }
 }
 
