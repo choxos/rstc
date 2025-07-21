@@ -1,0 +1,754 @@
+---
+title: "Comprehensive Machine Learning STC Analysis: Complete Guide"
+subtitle: "Advanced ML Methods for Simulated Treatment Comparison"
+author: "Advanced STC Methods Package"
+date: "`r format(Sys.Date(), '%B %d, %Y')`"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    toc_depth: 3
+    theme: flatly
+    code_folding: show
+    df_print: paged
+    fig_width: 10
+    fig_height: 6
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+  echo = TRUE,
+  warning = FALSE,
+  message = FALSE,
+  fig.align = "center",
+  cache = FALSE
+)
+
+# Load required libraries
+library(dplyr)
+library(ggplot2)
+library(gridExtra)
+library(knitr)
+library(DT)
+```
+
+# Introduction
+
+This comprehensive guide demonstrates advanced machine learning methods for Simulated Treatment Comparison (STC) analysis. We cover:
+
+1. **Tree-Based Methods**: Causal Forests, BART, XGBoost/LightGBM
+2. **Meta-Learning Approaches**: T-Learner, X-Learner, R-Learner, Double ML
+3. **Specialized Causal Methods**: TMLE with Super Learner, Causal Neural Networks
+4. **Advanced Ensemble Methods**: AIPW with ML, GANs for Causal Inference
+
+## Key Advantages of ML-based STC
+
+- **Heterogeneous Treatment Effects**: Identify subgroups with different treatment responses
+- **Nonlinear Relationships**: Capture complex interactions between covariates and outcomes
+- **Robust Inference**: Doubly robust methods provide valid estimates under weaker assumptions
+- **Flexible Modeling**: Adapt to various data types and outcome distributions
+- **Uncertainty Quantification**: Provide credible intervals and confidence bands
+
+# Setup and Data Preparation
+
+```{r load_functions}
+# Source all ML STC functions
+source("../utils/ml_stc_utils.R")
+source("../tree_based/causal_forests_stc.R")
+source("../tree_based/bart_stc.R")
+source("../tree_based/xgboost_stc.R")
+source("../meta_learning/meta_learners_stc.R")
+source("../meta_learning/double_ml_stc.R")
+source("../specialized_causal/tmle_stc.R")
+source("../specialized_causal/causal_neural_networks_stc.R")
+source("../ensemble_methods/aipw_stc.R")
+source("../ensemble_methods/gans_causal_stc.R")
+```
+
+## Simulate Realistic Clinical Trial Data
+
+We'll create a realistic dataset with:
+- Multiple baseline characteristics
+- Non-linear treatment effects
+- Heterogeneous treatment responses
+- Realistic noise levels
+
+```{r simulate_data}
+set.seed(2024)
+
+# Sample size
+n_trial <- 800
+n_target <- 1000
+
+# Generate baseline characteristics
+generate_clinical_data <- function(n) {
+  # Patient demographics
+  age <- rnorm(n, 65, 12)
+  age <- pmax(18, pmin(90, age))  # Constrain age
+  
+  # Comorbidities (correlated)
+  diabetes <- rbinom(n, 1, plogis(-1 + 0.02 * age))
+  hypertension <- rbinom(n, 1, plogis(-0.5 + 0.01 * age + 0.5 * diabetes))
+  
+  # Laboratory values
+  creatinine <- rnorm(n, 1.1, 0.3)
+  creatinine <- pmax(0.5, creatinine)  # Constrain to realistic values
+  
+  # Functional status
+  ejection_fraction <- rnorm(n, 45, 10)
+  ejection_fraction <- pmax(15, pmin(75, ejection_fraction))
+  
+  # Risk score
+  risk_score <- 0.1 * scale(age)[,1] + 0.3 * diabetes + 0.2 * hypertension + 
+                0.15 * scale(creatinine)[,1] - 0.1 * scale(ejection_fraction)[,1]
+  
+  return(data.frame(
+    age = age,
+    diabetes = diabetes,
+    hypertension = hypertension,
+    creatinine = creatinine,
+    ejection_fraction = ejection_fraction,
+    risk_score = risk_score
+  ))
+}
+
+# Generate trial data
+trial_data <- generate_clinical_data(n_trial)
+
+# Treatment assignment (non-random, based on patient characteristics)
+ps_true <- plogis(-0.5 + 0.3 * trial_data$risk_score + 
+                  0.2 * trial_data$diabetes - 0.1 * scale(trial_data$age)[,1])
+trial_data$treatment <- rbinom(n_trial, 1, ps_true)
+
+# Generate outcomes with heterogeneous treatment effects
+# Base outcome (risk of cardiovascular event)
+base_outcome <- plogis(-1.5 + 0.4 * trial_data$risk_score + 
+                       0.3 * trial_data$diabetes + 0.002 * trial_data$age)
+
+# Heterogeneous treatment effect
+# Effect is stronger in high-risk patients
+treatment_effect <- -0.3 - 0.2 * trial_data$risk_score - 
+                    0.15 * trial_data$diabetes * (trial_data$age > 70)
+
+# Generate outcomes
+prob_outcome <- plogis(qlogis(base_outcome) + 
+                      trial_data$treatment * treatment_effect)
+trial_data$outcome <- rbinom(n_trial, 1, prob_outcome)
+
+# Generate target population (external trial or real-world data)
+target_data <- generate_clinical_data(n_target)
+# Target population has different characteristics
+target_data$age <- target_data$age + 3  # Slightly older
+target_data$diabetes <- rbinom(n_target, 1, plogis(qlogis(0.25) + 0.01 * target_data$age))
+
+# Define covariate columns
+covariate_cols <- c("age", "diabetes", "hypertension", "creatinine", "ejection_fraction", "risk_score")
+
+# Display data summary
+cat("Trial Data Summary:\n")
+print(summary(trial_data))
+cat("\nTarget Population Summary:\n")
+print(summary(target_data))
+```
+
+## Data Visualization
+
+```{r data_viz, fig.width=12, fig.height=8}
+# Create visualization
+p1 <- ggplot(trial_data, aes(x = risk_score, y = as.numeric(outcome), color = factor(treatment))) +
+  geom_smooth(method = "loess", se = TRUE) +
+  geom_point(alpha = 0.5) +
+  labs(title = "Outcome by Risk Score and Treatment",
+       x = "Risk Score", y = "Outcome Probability",
+       color = "Treatment") +
+  theme_minimal()
+
+p2 <- ggplot(trial_data, aes(x = age, fill = factor(treatment))) +
+  geom_histogram(alpha = 0.7, position = "identity", bins = 30) +
+  labs(title = "Age Distribution by Treatment",
+       x = "Age", y = "Count", fill = "Treatment") +
+  theme_minimal()
+
+p3 <- ggplot(trial_data, aes(x = factor(treatment), y = risk_score)) +
+  geom_boxplot(aes(fill = factor(treatment)), alpha = 0.7) +
+  geom_jitter(width = 0.2, alpha = 0.5) +
+  labs(title = "Risk Score by Treatment Group",
+       x = "Treatment", y = "Risk Score", fill = "Treatment") +
+  theme_minimal()
+
+p4 <- ggplot(trial_data, aes(x = factor(diabetes), fill = factor(treatment))) +
+  geom_bar(position = "fill", alpha = 0.7) +
+  labs(title = "Treatment Proportion by Diabetes Status",
+       x = "Diabetes", y = "Proportion", fill = "Treatment") +
+  theme_minimal()
+
+grid.arrange(p1, p2, p3, p4, ncol = 2)
+```
+
+# Tree-Based Methods
+
+## Causal Forests
+
+Causal Forests provide honest estimation of heterogeneous treatment effects with built-in variable importance and confidence intervals.
+
+```{r causal_forests, eval=FALSE}
+# Note: Requires grf package
+# install.packages("grf")
+
+# Run Causal Forest analysis
+cf_results <- causal_forest_stc_analysis(
+  data = trial_data,
+  outcome_col = "outcome",
+  treatment_col = "treatment",
+  covariate_cols = covariate_cols,
+  target_population = target_data,
+  num_trees = 2000,
+  seed = 2024
+)
+
+cat("Causal Forest Results:\n")
+cat(sprintf("Estimated ATE: %.4f (SE: %.4f)\n", 
+            cf_results$ate_estimate, cf_results$ate_se))
+cat(sprintf("95%% CI: [%.4f, %.4f]\n", cf_results$ci_lower, cf_results$ci_upper))
+
+# Variable importance
+if (!is.null(cf_results$variable_importance)) {
+  print("Variable Importance:")
+  print(cf_results$variable_importance)
+}
+
+# Target population prediction
+if (!is.null(cf_results$target_predictions)) {
+  cat(sprintf("Target Population ATE: %.4f\n", cf_results$target_predictions$ate_estimate))
+}
+```
+
+## Bayesian Additive Regression Trees (BART)
+
+BART provides natural uncertainty quantification through its Bayesian framework.
+
+```{r bart_analysis, eval=FALSE}
+# Note: Requires BART and bartCause packages
+# install.packages(c("BART", "bartCause"))
+
+# Run BART analysis
+bart_results <- bart_stc_analysis(
+  data = trial_data,
+  outcome_col = "outcome",
+  treatment_col = "treatment",
+  covariate_cols = covariate_cols,
+  target_population = target_data,
+  n_trees = 200,
+  n_burn = 1000,
+  n_sim = 1000,
+  seed = 2024
+)
+
+cat("BART Results:\n")
+cat(sprintf("Estimated ATE: %.4f\n", bart_results$ate_estimate))
+cat(sprintf("95%% Credible Interval: [%.4f, %.4f]\n", 
+            bart_results$ci_lower, bart_results$ci_upper))
+
+# Posterior predictive checks
+if (!is.null(bart_results$diagnostics$posterior_predictive)) {
+  cat("Posterior predictive p-value:", bart_results$diagnostics$posterior_predictive$p_value)
+}
+```
+
+## XGBoost/LightGBM
+
+Gradient boosting methods often provide excellent predictive accuracy for both propensity scores and outcome models.
+
+```{r xgboost_analysis}
+# Run XGBoost analysis with hyperparameter tuning
+xgb_results <- xgboost_stc_analysis(
+  data = trial_data,
+  outcome_col = "outcome",
+  treatment_col = "treatment",
+  covariate_cols = covariate_cols,
+  target_population = target_data,
+  method = "xgboost",
+  approach = "separate_models",
+  tune_params = TRUE,
+  cv_folds = 5,
+  seed = 2024
+)
+
+cat("XGBoost Results:\n")
+cat(sprintf("Estimated ATE: %.4f\n", xgb_results$ate_estimate))
+
+# Feature importance
+if (!is.null(xgb_results$feature_importance)) {
+  print("Feature Importance:")
+  print(head(xgb_results$feature_importance))
+}
+
+# Target population prediction
+if (!is.null(xgb_results$target_predictions)) {
+  cat(sprintf("Target Population ATE: %.4f\n", xgb_results$target_predictions$ate_estimate))
+}
+```
+
+# Meta-Learning Approaches
+
+## T-Learner, X-Learner, and R-Learner
+
+Meta-learners provide flexible frameworks for estimating heterogeneous treatment effects.
+
+```{r meta_learners}
+# T-Learner (separate models for each treatment group)
+t_results <- t_learner_stc_analysis(
+  data = trial_data,
+  outcome_col = "outcome",
+  treatment_col = "treatment",
+  covariate_cols = covariate_cols,
+  base_learner = "rf",
+  target_population = target_data,
+  seed = 2024
+)
+
+# X-Learner (handles imbalanced treatment groups well)
+x_results <- x_learner_stc_analysis(
+  data = trial_data,
+  outcome_col = "outcome",
+  treatment_col = "treatment",
+  covariate_cols = covariate_cols,
+  base_learner = "rf",
+  target_population = target_data,
+  seed = 2024
+)
+
+# R-Learner (directly optimizes for causal objectives)
+r_results <- r_learner_stc_analysis(
+  data = trial_data,
+  outcome_col = "outcome",
+  treatment_col = "treatment",
+  covariate_cols = covariate_cols,
+  base_learner = "elastic_net",
+  target_population = target_data,
+  seed = 2024
+)
+
+# Compare results
+meta_comparison <- data.frame(
+  Method = c("T-Learner", "X-Learner", "R-Learner"),
+  ATE_Estimate = c(t_results$ate_estimate, x_results$ate_estimate, r_results$ate_estimate),
+  Target_ATE = c(
+    ifelse(is.null(t_results$target_predictions), NA, t_results$target_predictions$ate_estimate),
+    ifelse(is.null(x_results$target_predictions), NA, x_results$target_predictions$ate_estimate),
+    ifelse(is.null(r_results$target_predictions), NA, r_results$target_predictions$ate_estimate)
+  )
+)
+
+print("Meta-Learner Comparison:")
+print(meta_comparison)
+```
+
+## Double Machine Learning (DML)
+
+DML provides valid confidence intervals under weak assumptions using cross-fitting.
+
+```{r double_ml}
+# Run Double ML analysis
+dml_results <- double_ml_stc_analysis(
+  data = trial_data,
+  outcome_col = "outcome",
+  treatment_col = "treatment",
+  covariate_cols = covariate_cols,
+  ml_method = "superlearner",
+  n_folds = 5,
+  target_population = target_data,
+  seed = 2024
+)
+
+cat("Double ML Results:\n")
+cat(sprintf("Estimated ATE: %.4f (SE: %.4f)\n", 
+            dml_results$ate_estimate, dml_results$ate_se))
+cat(sprintf("95%% CI: [%.4f, %.4f]\n", dml_results$ci_lower, dml_results$ci_upper))
+
+# Model performance
+if (!is.null(dml_results$diagnostics$model_performance)) {
+  cat("Model Performance:\n")
+  print(dml_results$diagnostics$model_performance)
+}
+```
+
+# Specialized Causal Methods
+
+## TMLE with Super Learner
+
+TMLE provides doubly robust estimation with targeted bias reduction.
+
+```{r tmle_analysis, eval=FALSE}
+# Note: Requires SuperLearner and tmle packages
+# install.packages(c("SuperLearner", "tmle"))
+
+# Run TMLE analysis
+tmle_results <- tmle_stc_analysis(
+  data = trial_data,
+  outcome_col = "outcome",
+  treatment_col = "treatment",
+  covariate_cols = covariate_cols,
+  Q_SL_library = c("SL.glm", "SL.randomForest", "SL.xgboost"),
+  g_SL_library = c("SL.glm", "SL.randomForest", "SL.xgboost"),
+  target_population = target_data,
+  seed = 2024
+)
+
+cat("TMLE Results:\n")
+cat(sprintf("Estimated ATE: %.4f (SE: %.4f)\n", 
+            tmle_results$ate_estimate, tmle_results$ate_se))
+cat(sprintf("95%% CI: [%.4f, %.4f]\n", tmle_results$ci_lower, tmle_results$ci_upper))
+
+# Super Learner performance
+if (!is.null(tmle_results$diagnostics$sl_performance)) {
+  print("Super Learner Performance:")
+  print(tmle_results$diagnostics$sl_performance)
+}
+```
+
+## Causal Neural Networks
+
+Neural networks can capture complex, non-linear relationships while learning balanced representations.
+
+```{r neural_networks, eval=FALSE}
+# Note: Requires Python environment with TensorFlow
+
+# Setup Python environment (if not already done)
+nn_env <- setup_python_env(install_packages = FALSE)
+if (nn_env$status == "success") {
+  
+  # TarNet analysis
+  tarnet_results <- tarnet_stc_analysis(
+    data = trial_data,
+    outcome_col = "outcome",
+    treatment_col = "treatment",
+    covariate_cols = covariate_cols,
+    target_population = target_data,
+    representation_dim = 32,
+    hidden_layers = c(64, 32),
+    epochs = 100,
+    seed = 2024
+  )
+  
+  cat("TarNet Results:\n")
+  cat(sprintf("Estimated ATE: %.4f\n", tarnet_results$ate_estimate))
+  
+  # CFR analysis
+  cfr_results <- cfr_stc_analysis(
+    data = trial_data,
+    outcome_col = "outcome",
+    treatment_col = "treatment",
+    covariate_cols = covariate_cols,
+    target_population = target_data,
+    representation_dim = 32,
+    hidden_layers = c(64, 32),
+    epochs = 100,
+    distance_metric = "mmd",
+    seed = 2024
+  )
+  
+  cat("CFR Results:\n")
+  cat(sprintf("Estimated ATE: %.4f\n", cfr_results$ate_estimate))
+  
+} else {
+  cat("Python environment not available for neural networks.\n")
+}
+```
+
+# Advanced Ensemble Methods
+
+## AIPW with Machine Learning
+
+AIPW provides doubly robust estimation using flexible ML methods for both propensity scores and outcome models.
+
+```{r aipw_analysis}
+# Run AIPW analysis with Random Forest
+aipw_results <- aipw_stc_analysis(
+  data = trial_data,
+  outcome_col = "outcome",
+  treatment_col = "treatment",
+  covariate_cols = covariate_cols,
+  ps_method = "rf",
+  outcome_method = "rf",
+  cross_fit = TRUE,
+  n_folds = 5,
+  target_population = target_data,
+  seed = 2024
+)
+
+cat("AIPW Results:\n")
+cat(sprintf("Estimated ATE: %.4f (SE: %.4f)\n", 
+            aipw_results$ate_estimate, aipw_results$ate_se))
+cat(sprintf("95%% CI: [%.4f, %.4f]\n", aipw_results$ci_lower, aipw_results$ci_upper))
+
+# Diagnostics
+cat(sprintf("Propensity Score Overlap: %.3f\n", aipw_results$diagnostics$ps_overlap))
+cat(sprintf("Double Robust Score: %.3f\n", aipw_results$diagnostics$double_robust_score))
+
+# Target population prediction
+if (!is.null(aipw_results$target_predictions)) {
+  cat(sprintf("Target Population ATE: %.4f\n", aipw_results$target_predictions$ate_estimate))
+}
+```
+
+## GANs for Causal Inference
+
+GANs can generate counterfactual outcomes and handle complex confounding patterns.
+
+```{r gans_analysis, eval=FALSE}
+# Note: Requires Python environment with TensorFlow
+
+# Setup GAN environment (if not already done)
+gan_env <- setup_gan_env(install_packages = FALSE)
+if (gan_env$status == "success") {
+  
+  # GANITE analysis
+  ganite_results <- ganite_stc_analysis(
+    data = trial_data,
+    outcome_col = "outcome",
+    treatment_col = "treatment",
+    covariate_cols = covariate_cols,
+    target_population = target_data,
+    generator_dim = c(64, 32),
+    discriminator_dim = c(32, 16),
+    epochs = 100,
+    seed = 2024
+  )
+  
+  cat("GANITE Results:\n")
+  cat(sprintf("Estimated ATE: %.4f\n", ganite_results$ate_estimate))
+  
+  # CausalGAN analysis (simplified)
+  causal_gan_results <- causal_gan_stc_analysis(
+    data = trial_data,
+    outcome_col = "outcome",
+    treatment_col = "treatment",
+    covariate_cols = covariate_cols,
+    target_population = target_data,
+    latent_dim = 8,
+    generator_dim = c(32, 16),
+    discriminator_dim = c(16, 8),
+    epochs = 50,  # Reduced for example
+    seed = 2024
+  )
+  
+  cat("CausalGAN Results:\n")
+  cat(sprintf("Estimated ATE: %.4f\n", causal_gan_results$ate_estimate))
+  
+} else {
+  cat("Python environment not available for GANs.\n")
+}
+```
+
+# Comprehensive Results Comparison
+
+Let's compare all available methods:
+
+```{r results_comparison}
+# Collect results from implemented methods
+results_summary <- data.frame(
+  Method = c("XGBoost", "T-Learner", "X-Learner", "R-Learner", "Double ML", "AIPW"),
+  ATE_Estimate = c(
+    xgb_results$ate_estimate,
+    t_results$ate_estimate,
+    x_results$ate_estimate,
+    r_results$ate_estimate,
+    dml_results$ate_estimate,
+    aipw_results$ate_estimate
+  ),
+  Target_ATE = c(
+    ifelse(is.null(xgb_results$target_predictions), NA, xgb_results$target_predictions$ate_estimate),
+    ifelse(is.null(t_results$target_predictions), NA, t_results$target_predictions$ate_estimate),
+    ifelse(is.null(x_results$target_predictions), NA, x_results$target_predictions$ate_estimate),
+    ifelse(is.null(r_results$target_predictions), NA, r_results$target_predictions$ate_estimate),
+    ifelse(is.null(dml_results$target_predictions), NA, dml_results$target_predictions$ate_estimate),
+    ifelse(is.null(aipw_results$target_predictions), NA, aipw_results$target_predictions$ate_estimate)
+  ),
+  SE = c(
+    NA,  # XGBoost doesn't provide SE in this implementation
+    NA,  # T-Learner (simplified implementation)
+    NA,  # X-Learner (simplified implementation)
+    NA,  # R-Learner (simplified implementation)
+    dml_results$ate_se,
+    aipw_results$ate_se
+  ),
+  Method_Type = c("Tree-Based", "Meta-Learning", "Meta-Learning", "Meta-Learning", "Meta-Learning", "Ensemble")
+)
+
+# Display results
+kable(results_summary, digits = 4, caption = "Comprehensive ML-STC Results Comparison")
+
+# Visualization
+results_viz <- results_summary[!is.na(results_summary$ATE_Estimate), ]
+
+p_comparison <- ggplot(results_viz, aes(x = reorder(Method, ATE_Estimate), y = ATE_Estimate, fill = Method_Type)) +
+  geom_col(alpha = 0.8) +
+  geom_errorbar(aes(ymin = ATE_Estimate - 1.96 * SE, ymax = ATE_Estimate + 1.96 * SE), 
+                width = 0.2, alpha = 0.7) +
+  coord_flip() +
+  labs(title = "ATE Estimates Across ML Methods",
+       x = "Method", y = "ATE Estimate", fill = "Method Type") +
+  theme_minimal() +
+  theme(legend.position = "bottom")
+
+print(p_comparison)
+```
+
+# Model Diagnostics and Validation
+
+## Treatment Effect Heterogeneity
+
+```{r heterogeneity_analysis}
+# Analyze heterogeneity using methods that provide individual-level estimates
+
+# Function to create heterogeneity plot
+plot_heterogeneity <- function(individual_effects, risk_scores, method_name) {
+  het_data <- data.frame(
+    tau = individual_effects,
+    risk_score = risk_scores
+  )
+  
+  ggplot(het_data, aes(x = risk_score, y = tau)) +
+    geom_point(alpha = 0.6) +
+    geom_smooth(method = "loess", se = TRUE, color = "red") +
+    geom_hline(yintercept = 0, linetype = "dashed", alpha = 0.7) +
+    labs(title = paste("Treatment Effect Heterogeneity -", method_name),
+         x = "Risk Score", y = "Individual Treatment Effect") +
+    theme_minimal()
+}
+
+# Create heterogeneity plots for available methods
+het_plots <- list()
+
+if (!is.null(xgb_results$individual_effects)) {
+  het_plots[["XGBoost"]] <- plot_heterogeneity(xgb_results$individual_effects, 
+                                              trial_data$risk_score, "XGBoost")
+}
+
+if (!is.null(aipw_results$individual_effects)) {
+  het_plots[["AIPW"]] <- plot_heterogeneity(aipw_results$individual_effects, 
+                                           trial_data$risk_score, "AIPW")
+}
+
+if (!is.null(dml_results$individual_effects)) {
+  het_plots[["DML"]] <- plot_heterogeneity(dml_results$individual_effects, 
+                                          trial_data$risk_score, "Double ML")
+}
+
+# Display plots
+if (length(het_plots) > 0) {
+  do.call(grid.arrange, c(het_plots, ncol = 2))
+}
+```
+
+## Propensity Score Diagnostics
+
+```{r ps_diagnostics}
+# Analyze propensity score overlap and balance
+
+if (!is.null(aipw_results$propensity_scores)) {
+  ps_data <- data.frame(
+    ps = aipw_results$propensity_scores,
+    treatment = trial_data$treatment
+  )
+  
+  # Propensity score distribution
+  p_ps_dist <- ggplot(ps_data, aes(x = ps, fill = factor(treatment))) +
+    geom_histogram(alpha = 0.7, position = "identity", bins = 30) +
+    geom_vline(xintercept = c(0.05, 0.95), linetype = "dashed", color = "red") +
+    labs(title = "Propensity Score Distribution",
+         x = "Propensity Score", y = "Count", fill = "Treatment") +
+    theme_minimal()
+  
+  # Propensity score overlap
+  p_ps_overlap <- ggplot(ps_data, aes(x = factor(treatment), y = ps)) +
+    geom_boxplot(aes(fill = factor(treatment)), alpha = 0.7) +
+    geom_jitter(width = 0.2, alpha = 0.5) +
+    labs(title = "Propensity Score Overlap",
+         x = "Treatment", y = "Propensity Score", fill = "Treatment") +
+    theme_minimal()
+  
+  grid.arrange(p_ps_dist, p_ps_overlap, ncol = 2)
+  
+  # Print overlap statistics
+  cat("Propensity Score Diagnostics:\n")
+  cat(sprintf("Overlap (0.05-0.95): %.3f\n", aipw_results$diagnostics$ps_overlap))
+  cat(sprintf("Extreme values: %.3f\n", aipw_results$diagnostics$ps_extreme))
+}
+```
+
+# Sensitivity Analysis
+
+```{r sensitivity_analysis, eval=FALSE}
+# Perform sensitivity analysis for AIPW
+aipw_sensitivity <- aipw_sensitivity_analysis(
+  data = trial_data,
+  outcome_col = "outcome",
+  treatment_col = "treatment",
+  covariate_cols = covariate_cols
+)
+
+cat("AIPW Sensitivity Analysis:\n")
+print(aipw_sensitivity$summary)
+
+# Plot sensitivity results
+if (nrow(aipw_sensitivity$results) > 0) {
+  sens_plot <- ggplot(aipw_sensitivity$results, aes(x = interaction(ps_method, outcome_method), 
+                                                   y = ate_estimate)) +
+    geom_point(size = 3) +
+    geom_errorbar(aes(ymin = ate_estimate - 1.96 * ate_se, 
+                      ymax = ate_estimate + 1.96 * ate_se), width = 0.2) +
+    theme_minimal() +
+    theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+    labs(title = "AIPW Sensitivity Analysis",
+         x = "Method Combination", y = "ATE Estimate")
+  
+  print(sens_plot)
+}
+```
+
+# Recommendations and Best Practices
+
+## Method Selection Guidelines
+
+1. **For robustness**: Use doubly robust methods (AIPW, DML, TMLE)
+2. **For heterogeneity**: Use Causal Forests, neural networks, or meta-learners
+3. **For interpretability**: Use tree-based methods or linear meta-learners
+4. **For complex confounding**: Consider neural networks or GANs
+5. **For uncertainty quantification**: Use BART or TMLE
+
+## Implementation Considerations
+
+- **Sample size**: Larger samples benefit from flexible ML methods
+- **Covariate dimension**: High-dimensional data may require regularization
+- **Treatment assignment mechanism**: Known mechanisms favor model-based approaches
+- **Outcome type**: Binary, continuous, or time-to-event require different models
+- **Computational resources**: Neural networks and GANs require more resources
+
+## Reporting Standards
+
+When reporting ML-based STC results:
+
+1. **Method justification**: Explain why specific methods were chosen
+2. **Hyperparameter tuning**: Report cross-validation procedures
+3. **Diagnostics**: Include propensity score overlap and model fit metrics
+4. **Sensitivity analysis**: Test robustness to method choices
+5. **Heterogeneity**: Report subgroup analyses when relevant
+6. **Uncertainty**: Always include confidence/credible intervals
+
+# Conclusion
+
+This comprehensive guide demonstrates the application of advanced machine learning methods to STC analysis. Key takeaways:
+
+- **Multiple methods provide complementary insights** into treatment effects
+- **Doubly robust methods** (AIPW, DML, TMLE) offer protection against model misspecification
+- **Heterogeneity analysis** can identify important subgroups
+- **Proper diagnostics** are essential for valid inference
+- **Ensemble approaches** combining multiple methods may provide the most robust estimates
+
+The choice of method should be guided by the research question, data characteristics, and computational constraints. When in doubt, applying multiple methods and comparing results provides the most comprehensive assessment of treatment effects.
+
+---
+
+*This analysis demonstrates advanced ML methods for STC. All code is available in the accompanying R package. For questions or contributions, please refer to the package documentation.* 
