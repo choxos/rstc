@@ -633,16 +633,17 @@ if (!exists("bart_stc_analysis")) {
   bart_stc_analysis <- function(data, outcome_col, treatment_col, covariate_cols,
                                 target_population = NULL, n_trees = 200, n_burn = 1000,
                                 n_sim = 1000, n_chains = 4, use_bart_cause = TRUE, seed = 123) {
-    if (!requireNamespace("BART", quietly = TRUE)) {
-      # Fallback to T-learner if BART not available
+    
+    # Check for BART package availability
+    if (requireNamespace("BART", quietly = TRUE)) {
+      # If BART is available, we could implement actual BART analysis here
+      # For now, we'll use T-learner fallback for this demo
+      cat("⚠️ BART available but using T-learner fallback for this demo\n")
+    } else {
       cat("⚠️ BART package not available, using T-learner fallback\n")
-      return(t_learner_stc_analysis(data, outcome_col, treatment_col, covariate_cols, 
-                                    "glm", target_population, seed))
     }
     
-    # If BART is available, this would run the actual BART analysis
-    # For now, fallback to T-learner
-    cat("⚠️ Using T-learner fallback for BART implementation\n")
+    # Use T-learner fallback implementation
     return(t_learner_stc_analysis(data, outcome_col, treatment_col, covariate_cols, 
                                   "glm", target_population, seed))
   }
@@ -654,18 +655,18 @@ if (!exists("tmle_stc_analysis")) {
                                 g_SL_library = c("SL.glm", "SL.randomForest", "SL.xgboost", "SL.glmnet"),
                                 cv_folds = 10, family = "gaussian", target_population = NULL,
                                 delta_range = c(-0.5, 0.5), seed = 123) {
-    if (!requireNamespace("SuperLearner", quietly = TRUE) || 
-        !requireNamespace("tmle", quietly = TRUE)) {
-      # Fallback to AIPW if TMLE packages not available
-      cat("⚠️ TMLE or SuperLearner packages not available, using AIPW fallback\n")
-      return(aipw_stc_analysis(data, outcome_col, treatment_col, covariate_cols,
-                               ps_method = "glm", outcome_method = "glm", 
-                               cross_fit = TRUE, n_folds = 5, target_population = target_population, seed = seed))
+    
+    # Check for TMLE package availability
+    if (requireNamespace("SuperLearner", quietly = TRUE) && 
+        requireNamespace("tmle", quietly = TRUE)) {
+      # If TMLE packages are available, we could implement actual TMLE here
+      # For now, we'll use AIPW fallback for this demo
+      cat("⚠️ TMLE packages available but using AIPW fallback for this demo\n")
+    } else {
+      cat("⚠️ SuperLearner or tmle package not available, using AIPW fallback\n")
     }
     
-    # If packages are available, this would run actual TMLE
-    # For now, fallback to AIPW
-    cat("⚠️ Using AIPW fallback for TMLE implementation\n")
+    # Use AIPW fallback implementation
     return(aipw_stc_analysis(data, outcome_col, treatment_col, covariate_cols,
                              ps_method = "glm", outcome_method = "glm", 
                              cross_fit = TRUE, n_folds = 5, target_population = target_population, seed = seed))
